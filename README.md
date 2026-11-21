@@ -1,8 +1,7 @@
 # suno-tape
 
-Records the audio a public [Suno](https://suno.com) share page plays, by
-driving a real browser and capturing the operating system's actual audio
-output through a loopback device. Like dubbing a radio broadcast to tape,
+Records a [Suno](https://suno.com) track's own authorized playback to a
+file, via a Chrome extension. Like dubbing a radio broadcast to tape,
 automated.
 
 ## Why this exists, and what it deliberately does not do
@@ -15,143 +14,81 @@ out of scope on principle, not just difficulty.
 
 What *is* legitimate: recording the audio after it's been decrypted and
 is already playing, the same way a tape recorder next to a speaker would.
-That's what this tool automates -- it opens the share page like any
-visitor, clicks play like any visitor, and records what the OS actually
-outputs. Nothing here touches or bypasses Suno's protection.
+That's what this extension automates -- it uses `chrome.tabCapture` to
+grab the active tab's already-decoded audio directly, inside your own
+browser, already signed into your own Suno account. Nothing here touches
+or bypasses Suno's protection.
 
-## Requirements
+## Install
 
-- macOS (uses `avfoundation` for audio capture and `SwitchAudioSource` for
-  device switching; no Linux/Windows support yet)
-- [BlackHole](https://github.com/ExistentialAudio/BlackHole) (2ch), a free
-  virtual audio loopback driver: `brew install blackhole-2ch`
-- A **Multi-Output Device** combining BlackHole with your real output, so
-  you can still hear playback while it's captured. Set this up once in
-  **Audio MIDI Setup** (Applications/Utilities): the `+` button in the
-  bottom left → *Create Multi-Output Device* → check both BlackHole 2ch
-  and your normal output. Name it something you'll recognize (the default
-  config below expects a device whose name contains "BlackHole").
-- `brew install switchaudio-osx` (programmatic default-output switching)
-- `ffmpeg`
-- Python 3.9+, then:
-  ```
-  pip install -e .
-  playwright install chromium
-  ```
+Unpacked, for now -- not published to the Chrome Web Store:
 
-## Setup
-
-Log in once, so captures run already authenticated (this avoids Suno's
-anonymous-listening interruption, and the logged-out signup modal on
-share pages):
-
-```
-suno-tape login
-```
-
-A real browser window opens. Log in to your own Suno account there, the
-same way you always do, then come back to the terminal and press Enter.
-Your session is saved to `~/.suno-tape/auth.json` -- re-run `login`
-whenever it expires.
+1. `chrome://extensions` → enable *Developer mode* → *Load unpacked* →
+   select the `extension/` folder.
+2. Open a `suno.com` share or song page in a normal tab.
+3. Click the extension's toolbar icon, or press its keyboard shortcut.
 
 ## Usage
 
-```
-suno-tape capture https://suno.com/s/XXXXXXXX out.wav
-```
+- **Start recording**: the toolbar popup's button, or `Cmd+Shift+S` /
+  `Ctrl+Shift+S` (configurable at `chrome://extensions/shortcuts`).
+  Clicks play on the page and starts recording.
+- **Stop recording**: the popup's button (only enabled while recording),
+  or `Cmd+Shift+X` / `Ctrl+Shift+X`. Stops the capture directly --
+  independent of whatever the page's own player is doing.
+- Recording also stops on its own when the track's real `<audio>`/`<video>`
+  element fires `ended` or `pause` -- so just pausing/stopping playback in
+  Suno's own UI works too, no shortcut needed.
+- The popup shows live status (idle / recording which track) and reflects
+  whatever shortcuts are actually configured, so it stays correct even if
+  you remap them.
 
-Options:
-- `--output-device NAME` -- the system output device to switch to while
-  recording (default: `BlackHole + Steinberg` -- change to match your own
-  Multi-Output Device's name)
-- `--input-device NAME` -- the `ffmpeg`/`avfoundation` input to record
-  from (default: `BlackHole 2ch`)
-- `--normalize` -- apply loudness normalization (`ffmpeg loudnorm`,
-  -16 LUFS) after capture
-- `--auth-path PATH` -- use a saved login from somewhere other than the
-  default
-
-The track's duration is read directly from the page, so the recording is
-trimmed to exactly its real length (lead-in click latency is stripped
-automatically via silence detection).
+A `.webm` file (320kbps opus), named after the track, lands in your
+Downloads folder when a capture finishes. Convert to wav if needed:
+`ffmpeg -i "<track name>-*.webm" out.wav`.
 
 ## How it works
 
-1. Remember the current default audio output device.
-2. Switch the default output to your Multi-Output Device (so playback
-   feeds both BlackHole and your speakers).
-3. Start `ffmpeg` recording from the BlackHole input.
-4. Open the share page in a real (non-headless -- headless Chromium has
-   no real audio sink) browser, dismiss any modal, read the track's
-   duration, click the actual play button.
-5. Wait for the track's real length, periodically dismissing any
-   mid-playback interruption.
-6. Stop the recording and restore the original output device.
-7. Trim lead-in silence and cut to the track's exact duration.
+1. `background.js` gets a `chrome.tabCapture` stream id for the active tab.
+2. It spins up a hidden *offscreen document* (required in Manifest V3 --
+   the background service worker itself can't call `getUserMedia`/
+   `MediaRecorder`) and tells `content.js` (injected into the Suno page)
+   to click play.
+3. `content.js` finds the real `<audio>`/`<video>` element (filtering out
+   a short "sil-*" silence placeholder Suno preloads alongside it), reads
+   the track's name and duration from the page, and reports back once
+   that element fires `ended` or `pause`.
+4. `offscreen.js` records the tab's audio stream with `MediaRecorder` the
+   whole time, and also routes it back to your speakers (capturing a tab
+   silences it by default otherwise).
+5. On stop, the recorded blob is handed back to `background.js` as a data
+   URL -- `chrome.downloads` isn't available inside an offscreen document,
+   so this is the one API call that *must* happen in the background
+   script -- which saves it to Downloads, named `<track name>-<timestamp>.webm`.
 
 ## Known limitations
 
 - **Real-time only.** This is a recording, not a download -- a 4-minute
   track takes 4 minutes.
-- **macOS only**, for now (the audio-device plumbing is Core
-  Audio/`avfoundation`-specific).
-- **DOM-dependent.** The play button and duration are found by best-effort
-  DOM scraping (there's no public Suno API for this); if Suno reshuffles
-  their player markup, `suno_tape/capture.py`'s selectors need updating.
-- **Anonymous listening is capped.** Without a logged-in session, Suno
-  interrupts playback partway through with a "sign up to keep listening"
-  wall, truncating the capture. `suno-tape login` is meant to fix this,
-  but in testing the saved Playwright session still hit the wall -- not
-  yet resolved for this CLI version. See `extension/` for the approach
-  that sidesteps it entirely, by running inside your actual already-signed-in
-  Chrome profile instead of a separate automated browser.
+- **Chrome (or Chromium-based) only**, by nature of using
+  `chrome.tabCapture`.
+- **DOM-dependent.** The play button, duration, and track name are found
+  by best-effort DOM scraping (there's no public Suno API for any of
+  this); if Suno reshuffles their player markup, `extension/content.js`'s
+  selectors need updating.
 
-## extension/ -- the Chrome extension version
+## Debugging
 
-A second, architecturally different approach, in `extension/`: a Chrome
-extension using `chrome.tabCapture` to grab the active tab's *decoded*
-audio directly -- no virtual audio device, no macOS dependency, and no
-separate login flow, since it runs inside your actual Chrome, already
-signed into Suno however you normally are.
+If a capture produces no download, check (in this order):
+- the service worker console (`chrome://extensions` → *service worker*
+  link -- surfaces errors from `background.js`)
+- the offscreen document's console (same page, under "Inspect views" --
+  surfaces `getUserMedia`/`MediaRecorder` errors from `offscreen.js`)
+- the Suno tab's own console (`content.js` errors)
 
-**Install (unpacked, for now -- not published to the Chrome Web Store):**
-1. `chrome://extensions` → enable *Developer mode* → *Load unpacked* →
-   select the `extension/` folder.
-2. Open a `suno.com` share page in a normal tab.
-3. Press the shortcut (default `Cmd+Shift+S` on macOS, `Ctrl+Shift+S`
-   elsewhere -- configurable at `chrome://extensions/shortcuts`), or click
-   the extension's toolbar icon and press *Start recording*.
-4. The extension clicks play and records until playback actually stops --
-   listening to the real `<audio>`/`<video>` element's own `ended`/`pause`
-   events, not a guessed timer -- then saves a `.webm` file to your
-   Downloads folder.
-
-Convert to wav afterward if needed: `ffmpeg -i suno-tape-*.webm out.wav`.
-
-After editing any file under `extension/`: reload the extension at
-`chrome://extensions` (the circular reload icon on its card) *and* refresh
+After editing any file under `extension/`: reload the extension (the
+circular reload icon on its card at `chrome://extensions`) *and* refresh
 any already-open Suno tab -- content scripts are only (re-)injected on
 page load, so an existing tab keeps running the old `content.js` until
-refreshed.
-
-Verified end to end: keyboard shortcut → play → event-driven stop →
-offscreen capture → background download, landing a `.webm` in Downloads.
-
-One real gotcha hit along the way, worth knowing about: **`chrome.downloads`
-is not available inside an offscreen document.** The capture itself has to
-happen there (MV3 forbids `getUserMedia`/`MediaRecorder` in the service
-worker), but the recorded blob is handed back to `background.js` -- which
-has full API access -- as a data URL (`RECORDING_COMPLETE` message), and
-*that's* what actually calls `chrome.downloads.download()`. If you're
-debugging a future change here and see "Cannot read properties of
-undefined (reading 'download')" in the offscreen console, this is why.
-
-If a capture ever produces no download, check (in this order): the
-service worker console (`chrome://extensions` → *service worker* link --
-surfaces errors from `background.js`), the offscreen document's console
-(same page -- surfaces `getUserMedia`/`MediaRecorder` errors from
-`offscreen.js`), and the Suno tab's own console (`content.js` errors).
-After editing any file under `extension/`, both reload the extension
-*and* refresh any already-open Suno tab -- a crash mid-capture can also
-leave Chrome thinking the tab still has "an active stream"; refreshing
-the tab clears that.
+refreshed. A crash mid-capture can also leave Chrome thinking a tab still
+has "an active stream"; refreshing that tab clears it.
