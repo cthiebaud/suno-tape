@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+*.raw.wav
+
+# session cookies -- never commit these
+auth.json
+.suno-tape/

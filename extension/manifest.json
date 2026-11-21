@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "suno-tape",
+  "version": "0.1.0",
+  "description": "Record a Suno page's own authorized playback to a file -- like dubbing a broadcast to tape. Runs in your own logged-in session.",
+  "permissions": ["tabCapture", "offscreen", "downloads", "activeTab", "scripting"],
+  "host_permissions": ["https://suno.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "commands": {
+    "start-recording": {
+      "suggested_key": { "default": "Ctrl+Shift+S", "mac": "Command+Shift+S" },
+      "description": "Record the current Suno page's playback"
+    },
+    "stop-recording": {
+      "suggested_key": { "default": "Ctrl+Shift+X", "mac": "Command+Shift+X" },
+      "description": "Stop the current recording early"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://suno.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
