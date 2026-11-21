@@ -3,7 +3,7 @@
   "name": "suno-tape",
   "version": "0.1.0",
   "description": "Record a Suno page's own authorized playback to a file -- like dubbing a broadcast to tape. Runs in your own logged-in session.",
-  "permissions": ["tabCapture", "offscreen", "downloads", "activeTab", "scripting"],
+  "permissions": ["tabCapture", "offscreen", "downloads", "activeTab", "scripting", "storage"],
   "host_permissions": ["https://suno.com/*"],
   "background": {
     "service_worker": "background.js"

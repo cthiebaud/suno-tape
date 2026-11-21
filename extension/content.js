@@ -64,18 +64,34 @@ function findRealMediaElement() {
 
 // Reports exactly once, however playback stopped.
 function reportWhenPlaybackStops(mediaEl) {
+  console.log("suno-tape content: watching media element, loop =", mediaEl.loop,
+              "duration =", mediaEl.duration);
+
   let reported = false;
   const report = (reason) => {
     if (reported) return;
     reported = true;
     mediaEl.removeEventListener("ended", onEnded);
     mediaEl.removeEventListener("pause", onPause);
+    clearInterval(pollId);
+    console.log("suno-tape content: reporting PLAYBACK_STOPPED,", reason);
     chrome.runtime.sendMessage({ type: "PLAYBACK_STOPPED", reason });
   };
   const onEnded = () => report("ended");
   const onPause = () => report("paused");
   mediaEl.addEventListener("ended", onEnded);
   mediaEl.addEventListener("pause", onPause);
+
+  // Backstop: some players never fire a real 'ended' event at natural
+  // completion (e.g. a looping underlying element, or MediaSource quirks
+  // that skip the standard end-of-stream signal) -- poll the actual
+  // playback position directly too.
+  const pollId = setInterval(() => {
+    if (Number.isFinite(mediaEl.duration) && mediaEl.duration > 0 &&
+        mediaEl.currentTime >= mediaEl.duration - 0.25) {
+      report("ended (polled)");
+    }
+  }, 500);
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
